@@ -1,0 +1,90 @@
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+.app-root {
+  background-color: #004d9d;
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+}
+
+.pocari-stack {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  align-items: center;
+  justify-content: flex-start; /* 上詰めにして間の余白をなくす */
+}
+
+.pocari-part {
+  display: block;
+  width: min(584px, 80vw);
+  height: auto;
+}
+
+/* 上下をぴったり繋げつつ、画面内に収まるようにする */
+.pocari-text {
+  flex: 0 0 auto; /* コンテンツ分だけ高さを使う */
+  object-fit: contain;
+}
+
+.pocari-logo {
+  flex: 0 0 auto; /* コンテンツ分だけ高さを使う */
+}
+
+.pocari-logo-wrapper {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none; /* スマホでブラウザのスクロール/ズームを抑制してドラッグを優先 */
+}
+
+.pocari-logo-base {
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.pocari-logo-sticker-image,
+.pocari-logo-sticker-fall-image {
+  position: absolute;
+  inset: 0;
+  max-width: 100%;
+  max-height: 100%;
+  pointer-events: none; /* クリック判定は常にラッパーで */
+}
+
+.pocari-logo-sticker-image {
+  transform-origin: center right;
+  transform: translateX(var(--peel-translate-x, 0px)) rotateY(var(--peel-rotation, 0deg));
+  transition: transform 0.05s linear;
+}
+
+.pocari-logo-sticker-image.is-peeling {
+  transition: transform 0s linear;
+}
+
+@keyframes pocari-sticker-fall {
+  0% {
+    transform: translateY(0) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(120%) rotate(15deg);
+    opacity: 0;
+  }
+}
+
+.pocari-logo-sticker-fall-image {
+  animation: pocari-sticker-fall 0.8s ease-in forwards;
+}
