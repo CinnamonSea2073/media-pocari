@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sticker Peel Simulation v2</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #e0e5ec;
+            margin: 0;
+            overflow: hidden;
+            font-family: "Helvetica Neue", Arial, sans-serif;
+        }
+        canvas {
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            cursor: grab; /* つかめることを示すカーソル */
+            background-color: transparent;
+        }
+        canvas:active {
+            cursor: grabbing;
+        }
+        .instruction {
+            position: absolute;
+            bottom: 30px;
+            color: #555;
+            font-weight: bold;
+            pointer-events: none;
+            user-select: none;
+            background: rgba(255,255,255,0.8);
+            padding: 8px 16px;
+            border-radius: 20px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="instruction">シールの右端をつかんで、左へ引っ張ってください</div>
+    <canvas id="stickerCanvas" width="500" height="300"></canvas>
+
+<script>
+    const canvas = document.getElementById('stickerCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // サイズ設定
+    const width = canvas.width;
+    const height = canvas.height;
+
+    // 状態管理
+    let isDragging = false;
+    
+    // シールが張り付いている起点（つかんだ右端の元の位置）
+    let anchorPoint = { x: width, y: height / 2 };
+    
+    // 現在の指の位置（つかんでいる先端）- 初期状態は anchorPoint と同じ（めくれていない）
+    let dragPoint = { x: width, y: height / 2 };
+
+    // デザイン設定
+    const stickerColor = '#3498db'; // シールの色（青）
+    const glueColor = '#eeeeee';    // 裏面の色（白/グレー）
+    const text = "PULL ME!";
+
+    // --- イベントリスナー ---
+    const getPos = (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        return {
+            x: clientX - rect.left,
+            y: clientY - rect.top
+        };
+    };
+
+    const startDrag = (e) => {
+        const pos = getPos(e);
+        
+        // 判定：右端から60px以内のエリアならどこでもOK（右側全体）
+        if (pos.x > width - 60) {
+            isDragging = true;
+            
+            // 重要：つかんだY座標を「めくる起点」として固定する
+            anchorPoint = { x: width, y: pos.y };
+            // 初期状態はめくれていないので、dragPoint も anchorPoint と同じ位置から始める
+            dragPoint = { x: width, y: pos.y };
+        }
+    };
+
+    const moveDrag = (e) => {
+        if (!isDragging) return;
+        e.preventDefault(); // スマホでのスクロール防止
+        const pos = getPos(e);
+
+        // 制限：ドラッグ位置が右端を超えないようにする（めくれる方向のみ許可）
+        // また、上下に行き過ぎないように少し制限
+        let dx = Math.min(pos.x, width); 
+        let dy = pos.y;
+
+        dragPoint = { x: dx, y: dy };
+    };
+
+    const endDrag = () => {
+        isDragging = false;
+        // アニメーションで戻る処理は draw ループ内で dragPoint を anchorPoint に近づけることで実装
+    };
+
+    canvas.addEventListener('mousedown', startDrag);
+    window.addEventListener('mousemove', moveDrag);
+    window.addEventListener('mouseup', endDrag);
+
+    canvas.addEventListener('touchstart', startDrag, {passive: false});
+    window.addEventListener('touchmove', moveDrag, {passive: false});
+    window.addEventListener('touchend', endDrag);
+
+
+    // --- 描画ロジック ---
+    function draw() {
+        ctx.clearRect(0, 0, width, height);
+
+        // ドラッグしていない時は、徐々に元の位置（anchorPoint）に戻る
+        if (!isDragging) {
+            const ease = 0.2;
+            const diffX = anchorPoint.x - dragPoint.x;
+            const diffY = anchorPoint.y - dragPoint.y;
+            
+            if (Math.abs(diffX) > 0.5 || Math.abs(diffY) > 0.5) {
+                dragPoint.x += diffX * ease;
+                dragPoint.y += diffY * ease;
+            } else {
+                dragPoint.x = anchorPoint.x;
+                dragPoint.y = anchorPoint.y;
+            }
+        }
+
+        // 1. 折り目の計算
+        // つかんでいる点(dragPoint)と、元の位置(anchorPoint)の中点
+        const midX = (dragPoint.x + anchorPoint.x) / 2;
+        const midY = (dragPoint.y + anchorPoint.y) / 2;
+
+        // ベクトルと距離
+        const dx = anchorPoint.x - dragPoint.x;
+        const dy = anchorPoint.y - dragPoint.y;
+        const dist = Math.hypot(dx, dy);
+        const angle = Math.atan2(dy, dx);
+
+        // 完全に平らな状態かどうかの判定
+        if (dist < 1) {
+            drawFullSticker(false); // 通常描画
+            requestAnimationFrame(draw);
+            return;
+        }
+
+        // --- A. 表面（残っている部分）の描画 ---
+        ctx.save();
+        
+        // クリップパス：折り線より「左側（貼り付いている部分）」だけを表示
+        ctx.beginPath();
+        // 画面全体を覆う矩形を定義し、折り線で切る
+        // 折り線を通る直線を基準にクリップエリアを作成
+        const foldX = midX;
+        const foldY = midY;
+        
+        ctx.translate(foldX, foldY);
+        ctx.rotate(angle - Math.PI / 2);
+        // この矩形が「表示される表面」の領域（右側からめくれるので左側が残る）
+        ctx.rect(-width * 2, -height * 4, width * 4, height * 4); 
+        
+        // 座標系を戻す
+        ctx.rotate(-(angle - Math.PI / 2));
+        ctx.translate(-foldX, -foldY);
+        ctx.clip(); // 適用
+
+        drawContent(); // シールの中身を描画
+        ctx.restore();
+
+
+        // --- B. 裏面（めくれた部分）の描画 ---
+        ctx.save();
+
+        // 変換マトリックス：折り目で鏡面反転させる
+        ctx.translate(foldX, foldY);
+        ctx.rotate(angle);
+        ctx.scale(-1, 1); // 左右反転
+        ctx.rotate(-angle);
+        ctx.translate(-foldX, -foldY);
+
+        // 落ち影（シールが浮いている感じ）
+        ctx.shadowColor = "rgba(0,0,0,0.4)";
+        ctx.shadowBlur = 20;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 10;
+
+        // クリップ：めくれた部分のみを表示
+        ctx.beginPath();
+        ctx.translate(foldX, foldY);
+        ctx.rotate(angle - Math.PI / 2);
+        ctx.rect(-width * 2, 0, width * 4, height * 4); // 表面の逆領域（右側のめくれた部分）
+        ctx.rotate(-(angle - Math.PI / 2));
+        ctx.translate(-foldX, -foldY);
+        ctx.clip(); // 適用
+
+        // 裏面のベース（粘着面）
+        ctx.fillStyle = glueColor;
+        // シールの形状（角丸）
+        roundRect(ctx, 0, 0, width, height, 15);
+        ctx.fill();
+
+        // 折り目の陰影（丸みを表現）
+        const grad = ctx.createLinearGradient(foldX, foldY, foldX + dx * 0.4, foldY + dy * 0.4);
+        grad.addColorStop(0, 'rgba(0,0,0,0.15)'); // 折り目が少し暗い
+        grad.addColorStop(1, 'rgba(255,255,255,0.2)'); // ハイライト
+        ctx.fillStyle = grad;
+        ctx.fill();
+
+        ctx.restore();
+        
+        // --- 誘導用のハイライト（めくれる前の右端） ---
+        if (!isDragging && dist < 2) {
+             drawHint();
+        }
+
+        requestAnimationFrame(draw);
+    }
+
+    // シールの中身を描く関数
+    function drawContent() {
+        ctx.fillStyle = stickerColor;
+        roundRect(ctx, 0, 0, width, height, 15);
+        ctx.fill();
+
+        // 内枠
+        ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+        ctx.lineWidth = 4;
+        roundRect(ctx, 15, 15, width - 30, height - 30, 10);
+        ctx.stroke();
+
+        // テキスト
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 60px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(text, width / 2, height / 2);
+    }
+
+    // 平らな状態を描画（初期状態）
+    function drawFullSticker(showHint) {
+        drawContent();
+        if(showHint !== false) drawHint();
+    }
+    
+    // めくれる場所のヒント（右端の光沢）
+    function drawHint() {
+        const grad = ctx.createLinearGradient(width - 40, 0, width, 0);
+        grad.addColorStop(0, 'rgba(255,255,255,0)');
+        grad.addColorStop(0.5, 'rgba(255,255,255,0.2)');
+        grad.addColorStop(1, 'rgba(0,0,0,0.1)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(width - 50, 0, 50, height);
+    }
+
+    // 角丸矩形のユーティリティ
+    function roundRect(ctx, x, y, w, h, r) {
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.lineTo(x + w - r, y);
+        ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+        ctx.lineTo(x + w, y + h - r);
+        ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        ctx.lineTo(x + r, y + h);
+        ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+        ctx.lineTo(x, y + r);
+        ctx.quadraticCurveTo(x, y, x + r, y);
+        ctx.closePath();
+    }
+
+    // スタート
+    draw();
+
+</script>
+</body>
+</html>

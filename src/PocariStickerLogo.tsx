@@ -1,128 +1,276 @@
-import React, { useCallback, useRef, useState } from 'react';
-
-const SWIPE_MIN_DISTANCE = 40; // px: 必要なドラッグ距離を少し短く
-const START_EDGE_RATIO = 0.4; // 右端40%以内から開始（判定を広げる）
+import React, { useEffect, useRef, useState } from 'react';
 
 const PocariStickerLogo: React.FC = () => {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const [progress, setProgress] = useState(0); // 0〜1: めくれ進捗
-  const [isPeeling, setIsPeeling] = useState(false);
-  const [isFallen, setIsFallen] = useState(false);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const imageRef = useRef<HTMLImageElement | null>(null);
+  const videoContainerRef = useRef<HTMLDivElement>(null);
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const [isPeeledOff, setIsPeeledOff] = useState(false);
+  
+  // ドラッグ状態
+  const isDraggingRef = useRef(false);
+  const anchorPointRef = useRef({ x: 0, y: 0 });
+  const dragPointRef = useRef({ x: 0, y: 0 });
 
-  const dragState = useRef<{
-    active: boolean;
-    startX: number;
-    lastX: number;
-    containerWidth: number;
-  } | null>(null);
-
-  const reset = useCallback(() => {
-    setProgress(0);
-    setIsPeeling(false);
-    setIsFallen(false);
-    dragState.current = null;
+  // 画像をプリロード
+  useEffect(() => {
+    const img = new Image();
+    img.onload = () => {
+      imageRef.current = img;
+      setImageLoaded(true);
+    };
+    img.src = '/pocari_logo.svg';
   }, []);
 
-  const handlePointerDown = useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      if (isFallen) return; // 一度落ちたらリセット前は反応しない
+  // 描画ループ
+  useEffect(() => {
+    if (!imageLoaded || !canvasRef.current || !imageRef.current || isPeeledOff) return;
 
-      const rect = containerRef.current?.getBoundingClientRect();
-      if (!rect) return;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
 
-      const x = e.clientX - rect.left;
-      const fromRight = rect.width - x;
+    const img = imageRef.current;
+    
+    // キャンバスサイズを画像に合わせる
+    const maxWidth = Math.min(584, window.innerWidth * 0.8);
+    const scale = maxWidth / img.width;
+    const width = img.width * scale;
+    const height = img.height * scale;
+    
+    canvas.width = width;
+    canvas.height = height;
 
-      // 右端から開始したときのみ有効（スマホでも広めに判定）
-      if (fromRight / rect.width >= START_EDGE_RATIO) {
-        dragState.current = {
-          active: true,
-          startX: x,
-          lastX: x,
-          containerWidth: rect.width,
-        };
-        setIsPeeling(true);
-        containerRef.current?.setPointerCapture(e.pointerId);
+    // 初期位置設定
+    anchorPointRef.current = { x: width, y: height / 2 };
+    dragPointRef.current = { x: width, y: height / 2 };
+
+    let animationFrameId: number;
+
+    const draw = () => {
+      ctx.clearRect(0, 0, width, height);
+
+      // ドラッグしていない時は元の位置に戻る（完全にはがれていない場合のみ）
+      if (!isDraggingRef.current) {
+        const ease = 0.2;
+        const diffX = anchorPointRef.current.x - dragPointRef.current.x;
+        const diffY = anchorPointRef.current.y - dragPointRef.current.y;
+        
+        if (Math.abs(diffX) > 0.5 || Math.abs(diffY) > 0.5) {
+          dragPointRef.current.x += diffX * ease;
+          dragPointRef.current.y += diffY * ease;
+        } else {
+          dragPointRef.current.x = anchorPointRef.current.x;
+          dragPointRef.current.y = anchorPointRef.current.y;
+        }
       }
-    },
-    [isFallen]
-  );
 
-  const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragState.current || !dragState.current.active) return;
+      const midX = (dragPointRef.current.x + anchorPointRef.current.x) / 2;
+      const midY = (dragPointRef.current.y + anchorPointRef.current.y) / 2;
 
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
+      const dx = anchorPointRef.current.x - dragPointRef.current.x;
+      const dy = anchorPointRef.current.y - dragPointRef.current.y;
+      const dist = Math.hypot(dx, dy);
+      const angle = Math.atan2(dy, dx);
 
-    const x = e.clientX - rect.left;
-    const delta = dragState.current.startX - x; // 右→左で正になる
+      // 完全にはがれたかチェック（左端まで引っ張られた）
+      if (dragPointRef.current.x < width * 0.1) {
+        setIsPeeledOff(true);
+        return;
+      }
 
-    if (delta <= 0) {
-      setProgress(0);
-      return;
+      // 平らな状態
+      if (dist < 1) {
+        drawFullSticker();
+        animationFrameId = requestAnimationFrame(draw);
+        return;
+      }
+
+      const foldX = midX;
+      const foldY = midY;
+
+      // 表面（貼り付いている部分）
+      ctx.save();
+      ctx.beginPath();
+      ctx.translate(foldX, foldY);
+      ctx.rotate(angle - Math.PI / 2);
+      ctx.rect(-width * 2, -height * 4, width * 4, height * 4);
+      ctx.rotate(-(angle - Math.PI / 2));
+      ctx.translate(-foldX, -foldY);
+      ctx.clip();
+      drawContent();
+      ctx.restore();
+
+      // 裏面（めくれた部分）
+      ctx.save();
+      ctx.translate(foldX, foldY);
+      ctx.rotate(angle);
+      ctx.scale(-1, 1);
+      ctx.rotate(-angle);
+      ctx.translate(-foldX, -foldY);
+
+      ctx.shadowColor = "rgba(0,0,0,0.4)";
+      ctx.shadowBlur = 20;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 10;
+
+      ctx.beginPath();
+      ctx.translate(foldX, foldY);
+      ctx.rotate(angle - Math.PI / 2);
+      ctx.rect(-width * 2, 0, width * 4, height * 4);
+      ctx.rotate(-(angle - Math.PI / 2));
+      ctx.translate(-foldX, -foldY);
+      ctx.clip();
+
+      // 裏面は白/グレー
+      ctx.fillStyle = '#eeeeee';
+      ctx.fillRect(0, 0, width, height);
+
+      // 折り目の陰影
+      const grad = ctx.createLinearGradient(foldX, foldY, foldX + dx * 0.4, foldY + dy * 0.4);
+      grad.addColorStop(0, 'rgba(0,0,0,0.15)');
+      grad.addColorStop(1, 'rgba(255,255,255,0.2)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, width, height);
+
+      ctx.restore();
+
+      // ヒント表示
+      if (!isDraggingRef.current && dist < 2) {
+        drawHint();
+      }
+
+      animationFrameId = requestAnimationFrame(draw);
+    };
+
+    const drawContent = () => {
+      ctx.drawImage(img, 0, 0, width, height);
+    };
+
+    const drawFullSticker = () => {
+      drawContent();
+      drawHint();
+    };
+
+    const drawHint = () => {
+      const grad = ctx.createLinearGradient(width - 40, 0, width, 0);
+      grad.addColorStop(0, 'rgba(255,255,255,0)');
+      grad.addColorStop(0.5, 'rgba(255,255,255,0.2)');
+      grad.addColorStop(1, 'rgba(0,0,0,0.1)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(width - 50, 0, 50, height);
+    };
+
+    draw();
+
+    return () => {
+      cancelAnimationFrame(animationFrameId);
+    };
+  }, [imageLoaded, isPeeledOff]);
+
+  // ビデオのマスク設定
+  useEffect(() => {
+    if (!isPeeledOff || !imageRef.current || !videoContainerRef.current) return;
+
+    const img = imageRef.current;
+    const maxWidth = Math.min(584, window.innerWidth * 0.8);
+    const scale = maxWidth / img.width;
+    const width = img.width * scale;
+    const height = img.height * scale;
+
+    videoContainerRef.current.style.width = `${width}px`;
+    videoContainerRef.current.style.height = `${height}px`;
+  }, [isPeeledOff]);
+
+  // イベントハンドラー
+  const getPos = (e: MouseEvent | TouchEvent) => {
+    if (!canvasRef.current) return null;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    return {
+      x: clientX - rect.left,
+      y: clientY - rect.top
+    };
+  };
+
+  const startDrag = (e: MouseEvent | TouchEvent) => {
+    if (isPeeledOff) return;
+    const pos = getPos(e);
+    if (!pos || !canvasRef.current) return;
+
+    const width = canvasRef.current.width;
+    
+    if (pos.x > width - 60) {
+      isDraggingRef.current = true;
+      anchorPointRef.current = { x: width, y: pos.y };
+      dragPointRef.current = { x: width, y: pos.y };
     }
+  };
 
-    const ratio = Math.min(1, delta / Math.max(SWIPE_MIN_DISTANCE, dragState.current.containerWidth * 0.6));
-    setProgress(ratio);
-    dragState.current.lastX = x;
-  }, []);
+  const moveDrag = (e: MouseEvent | TouchEvent) => {
+    if (!isDraggingRef.current || isPeeledOff) return;
+    e.preventDefault();
+    
+    const pos = getPos(e);
+    if (!pos || !canvasRef.current) return;
 
-  const handlePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragState.current || !dragState.current.active) return;
+    const width = canvasRef.current.width;
+    const dx = Math.min(pos.x, width);
+    
+    dragPointRef.current = { x: dx, y: pos.y };
+  };
 
-    const totalDelta = dragState.current.startX - dragState.current.lastX;
+  const endDrag = () => {
+    isDraggingRef.current = false;
+  };
 
-    if (totalDelta > SWIPE_MIN_DISTANCE) {
-      // 十分右→左に動かしたら、残りをアニメーションでめくり切りつつ下に落とす
-      setProgress(1);
-      setIsFallen(true);
-    } else {
-      // 足りなければ元に戻す
-      setProgress(0);
-      setIsPeeling(false);
-    }
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
 
-    dragState.current = null;
-    containerRef.current?.releasePointerCapture(e.pointerId);
-  }, []);
+    canvas.addEventListener('mousedown', startDrag as any);
+    window.addEventListener('mousemove', moveDrag as any);
+    window.addEventListener('mouseup', endDrag);
 
-  const peelRotation = -progress * 75; // 右端を支点に手前にめくれる
-  const peelTranslateX = -progress * 10; // 少しだけ左に
+    canvas.addEventListener('touchstart', startDrag as any, { passive: false });
+    window.addEventListener('touchmove', moveDrag as any, { passive: false });
+    window.addEventListener('touchend', endDrag);
+
+    return () => {
+      canvas.removeEventListener('mousedown', startDrag as any);
+      window.removeEventListener('mousemove', moveDrag as any);
+      window.removeEventListener('mouseup', endDrag);
+
+      canvas.removeEventListener('touchstart', startDrag as any);
+      window.removeEventListener('touchmove', moveDrag as any);
+      window.removeEventListener('touchend', endDrag);
+    };
+  }, [imageLoaded, isPeeledOff]);
 
   return (
-    <div
-      className="pocari-logo-wrapper"
-      ref={containerRef}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      onPointerCancel={handlePointerUp}
-    >
-      {/* 下地ロゴ */}
-      <img src="/pocari_logo.svg" alt="Pocari Logo" className="pocari-logo-base" />
-
-      {/* めくれるレイヤー（ドラッグ中〜めくり切るまで） */}
-      {!isFallen && (
-        <img
-          src="/pocari_logo.svg"
-          alt="Pocari Logo Sticker"
-          className={`pocari-logo-sticker-image ${isPeeling ? 'is-peeling' : ''}`}
-          style={{
-            '--peel-rotation': `${peelRotation}deg`,
-            '--peel-translate-x': `${peelTranslateX}px`,
-          } as React.CSSProperties}
-          draggable={false}
-        />
-      )}
-
-      {/* 落下アニメーション用レイヤー */}
-      {isFallen && (
-        <img
-          src="/pocari_logo.svg"
-          alt="Pocari Logo Fallen"
-          className="pocari-logo-sticker-fall-image"
-          onAnimationEnd={reset}
-          draggable={false}
+    <div className="pocari-logo-wrapper">
+      {isPeeledOff ? (
+        <div ref={videoContainerRef} className="pocari-video-container">
+          <iframe
+            className="pocari-video-iframe"
+            src="https://www.youtube.com/embed/nLLPBRPcF4w?autoplay=1&mute=1&controls=1&modestbranding=1&rel=0"
+            title="YouTube video player"
+            frameBorder="0"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            allowFullScreen
+          />
+          <img 
+            src="/pocari_logo.svg" 
+            alt="Pocari Logo Mask" 
+            className="pocari-video-mask"
+          />
+        </div>
+      ) : (
+        <canvas
+          ref={canvasRef}
+          className="pocari-logo-canvas"
+          style={{ cursor: 'grab' }}
         />
       )}
     </div>
